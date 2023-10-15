@@ -56,7 +56,7 @@ while len(remaining_offsets) > 0:
             response_offset = int(response_list[0].split(":")[1])
             response_bytes = int(response_list[1].split(":")[1])
             line = "\n".join(response_list[3:])
-            if (response_offset in remaining_offsets):
+            if ((response_offset in remaining_offsets) and (response_bytes == len(line))):
                 accepted_offsets.append(response_offset)
                 file[response_offset // MAX_BYTES] = line[0:response_bytes]
                 # print(f"received response in {round(response_time, 5)} seconds")
@@ -75,7 +75,7 @@ while len(remaining_offsets) > 0:
     for offset in accepted_offsets:
         if offset in remaining_offsets:
             remaining_offsets.__delitem__(offset)
-    print(remaining_offsets)
+    # print(remaining_offsets)
 
 
 # while offset < max_size:
