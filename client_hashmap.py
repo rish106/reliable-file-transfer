@@ -34,13 +34,14 @@ successful_requests = 0
 failed_requests = 0
 sock.settimeout(curr_timeout)
 file_data = ""
+# remaining_offsets = OrderedDict.fromkeys(list(range(0, max_size, MAX_BYTES)))
 remaining_offsets = OrderedDict.fromkeys(list(range(0, max_size, MAX_BYTES)))
 file = []
 for i in range(0, max_size, MAX_BYTES):
     file.append("")
 
 while len(remaining_offsets) > 0:
-    accepted_offsets = {}
+    accepted_offsets = []
     print(f"Remaining offsets: {len(remaining_offsets)}")
     for offset in remaining_offsets:
         num_bytes = min(MAX_BYTES, max_size - offset)
@@ -55,9 +56,9 @@ while len(remaining_offsets) > 0:
             response_offset = int(response_list[0].split(":")[1])
             response_bytes = int(response_list[1].split(":")[1])
             line = "\n".join(response_list[3:])
-            if ((response_offset in remaining_offsets) and (response_offset not in accepted_offsets) and (response_bytes == len(line))):
-                accepted_offsets[offset] = 0
-                file[response_offset // MAX_BYTES] = line[0:response_bytes]
+            if ((response_offset in remaining_offsets) and (len(file[response_offset // MAX_BYTES]) == 0) and (response_bytes == len(line))):
+                accepted_offsets.append(response_offset)
+                file[response_offset // MAX_BYTES] = line
                 # print(f"received response in {round(response_time, 5)} seconds")
                 successful_requests += 1
                 curr_timeout *= 0.95
@@ -70,7 +71,41 @@ while len(remaining_offsets) > 0:
             sock.settimeout(curr_timeout)
 
     for offset in accepted_offsets:
-        remaining_offsets.pop(offset)
+        if offset in remaining_offsets:
+            remaining_offsets.__delitem__(offset)
+    # print(remaining_offsets)
+
+
+# while offset < max_size:
+#     num_bytes = min(MAX_BYTES, max_size - offset)
+#     request_message = f"Offset: {offset}\nNumBytes: {num_bytes}\n\n"
+#     header_bytes = len(request_message)
+#     sock.sendto(request_message.encode("utf-8"), (UDP_IP, UDP_PORT))
+#     try:
+#         response_data, addr = sock.recvfrom(num_bytes + header_bytes)
+#         response_list = response_data.decode("utf-8").split("\n")
+#         response_offset = int(response_list[0].split(":")[1])
+#         line = "\n".join(response_list[3:])
+#         if (response_offset == offset and len(line) == num_bytes):
+#             file_data += line
+#             offset += num_bytes
+#             successful_requests += 1
+#             curr_timeout *= 0.95
+#             sock.settimeout(curr_timeout)
+#         else:
+#             if offset not in failed_offsets:
+#                 failed_offsets[offset] = 1
+#             else:
+#                 failed_offsets[offset] += 1
+#             
+#     except socket.timeout:
+#         if offset not in failed_offsets:
+#             failed_offsets[offset] = 1
+#         else:
+#             failed_offsets[offset] += 1
+#         failed_requests += 1
+#         curr_timeout *= 1.2
+#         sock.settimeout(curr_timeout)
 
 
 for content in file:
