@@ -2,3 +2,4 @@
 *.log
 *.class
 *.pdf
+.DS_Store
