@@ -12,8 +12,8 @@ y = data[:, 1]
 plt.figure(figsize=(8, 6))
 plt.scatter(x, y, c='blue', marker='o',s=1)
 plt.xlabel('Time (s)')
-plt.ylabel('Offset')
-plt.title('Time vs Offset')
+plt.ylabel('Sequence Number')
+plt.title('Server far away from Client')
 plt.grid(True)
 
 # Save the plot as a PDF

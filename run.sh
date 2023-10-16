@@ -14,10 +14,13 @@
 false_cnt=0
 true_cnt=0
 
+target_ip="$1"
+target_port="$2"
+
 for ((i = 0; i < 100; i++)); do
     # java UDPServer 9801 big.txt.1 "$line_cnt" constantrate notournament verbose > /dev/null &
     # sleep 0.5 &&
-    output="$(python3 client_hashmap.py 127.0.0.1 9801)"
+    output="$(python3 client_hashmap.py "$target_ip" "$target_port")"
     if [[ ! $(echo "$output" | grep "Result: true") ]]; then
         echo "Result false :("
         false_cnt=$((false_cnt + 1))
