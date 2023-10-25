@@ -1,6 +1,6 @@
 import sys
 import socket
-from time import sleep
+from time import sleep, perf_counter
 import hashlib
 from collections import OrderedDict
 
@@ -8,27 +8,76 @@ if len(sys.argv) < 3:
     print("Server IP Address and port required as arguments")
     exit(1)
 
-UDP_IP = sys.argv[1]
-UDP_PORT = int(sys.argv[2])
+SERVER_IP = sys.argv[1]
+SERVER_PORT = int(sys.argv[2])
 MAX_BYTES = 1448
 SOCKET_RECEIVE_BYTES = 2048
+
 SLEEP_SECONDS = 0.003
-INITIAL_TIMEOUT_SECONDS = 0.01
-TIMEOUT_DECREASE_FACTOR = 0.95
-TIMEOUT_INCREASE_FACTOR = 1.2
+TIMEOUT_SECONDS = 0.005
+SLEEP_SQUISH_SECONDS = 0.01
 
+INITIAL_BURST_SIZE = 4
 
-curr_timeout = INITIAL_TIMEOUT_SECONDS
-size_message = b"SendSize\nReset\n\n"
+size_message = "SendSize\nReset\n\n"
 
 successful_requests = 0
 failed_requests = 0
+squished_requests = 0
 
 MAX_SIZE = -1
 MAX_ATTEMPTS = 100
+
+remaining_offsets = OrderedDict()
+file = []
+
+
+def send_requests(request_offsets):
+    for offset in request_offsets:
+        num_bytes = min(MAX_BYTES, MAX_SIZE - offset)
+        request_message = f"Offset: {offset}\nNumBytes: {num_bytes}\n\n"
+        try:
+            sock.sendto(request_message.encode("utf-8"), (SERVER_IP, SERVER_PORT))
+            sleep(SLEEP_SECONDS)
+        except:
+            print("Error sending request to server")
+            exit(1)
+
+
+def receive_requests(burst_size):
+    global squished_requests, successful_requests, failed_requests
+    accepted_offsets = []
+    for _ in range(burst_size):
+        try:
+            response_bytes, addr = sock.recvfrom(SOCKET_RECEIVE_BYTES)
+            response_data = response_bytes.decode("utf-8")
+            response_tokens = response_data.split("\n")
+            response_offset = int(response_tokens[0].split(":")[1])
+            content = ""
+            if (response_tokens[2] == "Squished"):
+                content = "\n".join(response_tokens[4:])
+                squished_requests += 1
+                sleep(SLEEP_SQUISH_SECONDS)
+            else:
+                content = "\n".join(response_tokens[3:])
+            if (len(file[response_offset // MAX_BYTES]) == 0):
+                accepted_offsets.append(response_offset)
+                file[response_offset // MAX_BYTES] = content
+                successful_requests += 1
+        except socket.timeout:
+            failed_requests += 1
+    return accepted_offsets
+
+
+burst_size = INITIAL_BURST_SIZE
+max_burst_size = INITIAL_BURST_SIZE
+min_burst_size = INITIAL_BURST_SIZE
+
+
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.settimeout(curr_timeout)
-sock.sendto(size_message, (UDP_IP, UDP_PORT))
+sock.settimeout(TIMEOUT_SECONDS)
+sock.sendto(size_message.encode("utf-8"), (SERVER_IP, SERVER_PORT))
+
 for _ in range(MAX_ATTEMPTS):
     try:
         size_data, addr = sock.recvfrom(SOCKET_RECEIVE_BYTES);
@@ -42,63 +91,70 @@ if (MAX_SIZE == -1):
     exit(1)
 print(f"Max Size: {MAX_SIZE}")
 
-remaining_offsets = OrderedDict.fromkeys(list(range(0, MAX_SIZE, MAX_BYTES)))
-file = []
 for i in range(0, MAX_SIZE, MAX_BYTES):
+    remaining_offsets[i] = 0
     file.append("")
 
-while len(remaining_offsets) > 0:
-    accepted_offsets = []
+try:
+    while len(remaining_offsets) > 0:
+        accepted_offsets = []
+        print(f"Remaining offsets: {len(remaining_offsets)}")
+        current_offsets = []
+
+        for offset in remaining_offsets:
+            current_offsets.append(offset)
+            if (len(current_offsets) >= burst_size):
+                send_requests(current_offsets)
+                accepted_offsets_in_burst = receive_requests(len(current_offsets))
+                for accepted_offset in accepted_offsets_in_burst:
+                    accepted_offsets.append(accepted_offset)
+                if (len(accepted_offsets_in_burst) == len(current_offsets)):
+                    burst_size += 1
+                    max_burst_size = max(max_burst_size, burst_size)
+                else:
+                    burst_size = max(burst_size // 2, 1)
+                    min_burst_size = min(min_burst_size, burst_size)
+                current_offsets.clear()
+
+        if (len(current_offsets) > 0):
+            send_requests(current_offsets)
+            accepted_offsets_in_burst = receive_requests(len(current_offsets))
+            for accepted_offset in accepted_offsets_in_burst:
+                accepted_offsets.append(accepted_offset)
+            if (len(accepted_offsets_in_burst) == len(current_offsets)):
+                burst_size += 1
+                max_burst_size = max(max_burst_size, burst_size)
+            else:
+                burst_size = max(burst_size // 2, 1)
+                min_burst_size = min(min_burst_size, burst_size)
+            current_offsets.clear()
+
+        for offset in accepted_offsets:
+            remaining_offsets.pop(offset)
+
+except KeyboardInterrupt:
     print(f"Remaining offsets: {len(remaining_offsets)}")
-    for offset in remaining_offsets:
-        num_bytes = min(MAX_BYTES, MAX_SIZE - offset)
-        request_message = f"Offset: {offset}\nNumBytes: {num_bytes}\n\n"
-        header_bytes = len(request_message)
-        sock.sendto(request_message.encode("utf-8"), (UDP_IP, UDP_PORT))
-        try:
-            response_data, addr = sock.recvfrom(SOCKET_RECEIVE_BYTES)
-            response_list = response_data.decode("utf-8").split("\n")
-            if not response_list[0].startswith("Offset: "):
-                continue
-            response_offset = int(response_list[0].split(":")[1])
-            response_bytes = int(response_list[1].split(":")[1])
-            content = "\n".join(response_list[3:])
-            if ((response_offset in remaining_offsets) and (len(file[response_offset // MAX_BYTES]) == 0) and (response_bytes == len(content))):
-                accepted_offsets.append(response_offset)
-                file[response_offset // MAX_BYTES] = content
-                # print(f"received response in {round(response_time, 5)} seconds")
-                successful_requests += 1
-                curr_timeout *= TIMEOUT_DECREASE_FACTOR
-                sock.settimeout(curr_timeout)
-            sleep(SLEEP_SECONDS)
-
-        except socket.timeout:
-            failed_requests += 1
-            curr_timeout *= TIMEOUT_INCREASE_FACTOR
-            sock.settimeout(curr_timeout)
-
-    for offset in accepted_offsets:
-        remaining_offsets.pop(offset)
+    exit(1)
 
 
-file_data = ""
-for content in file:
-    file_data += content
-print(f"Bytes of data received {len(file_data)}")
+file_data = "".join(file)
+print(f"Bytes of data received: {len(file_data)}")
 
 file_data_hash = hashlib.md5(file_data.encode("utf-8")).hexdigest()
 print(f"MD5 hash: {file_data_hash}")
 
-submit_message = bytes(f"Submit: 2021CS10099_2021CS10581@slowbrains\nMD5: {file_data_hash}\n\n", encoding="utf-8")
-sock.sendto(submit_message, (UDP_IP, UDP_PORT))
+submit_message = f"Submit: 2021CS10099_2021CS10581@slowbrains\nMD5: {file_data_hash}\n\n"
+sock.sendto(submit_message.encode("utf-8"), (SERVER_IP, SERVER_PORT))
 
 
 while True:
     try:
-        data, addr = sock.recvfrom(SOCKET_RECEIVE_BYTES);
-        submit_response = data.decode("utf-8")
+        response_data, addr = sock.recvfrom(SOCKET_RECEIVE_BYTES);
+        submit_response = response_data.decode("utf-8")
         if submit_response.__contains__("Result: ") and submit_response.__contains__("Time: ") and submit_response.__contains__("Penalty: "):
-            print(submit_response)
+            print("---------------------------------")
+            print(submit_response[:-2])
+            print("---------------------------------")
             break
     except:
         pass
@@ -106,4 +162,7 @@ while True:
 
 print(f"Successful requests: {successful_requests}")
 print(f"Failed requests: {failed_requests}")
-print(f"Final timeout: {curr_timeout}")
+print(f"Squished requests: {squished_requests}")
+print(f"Final Burst Size: {burst_size}")
+print(f"Minimum Burst Size: {min_burst_size}")
+print(f"Maximum Burst Size: {max_burst_size}")
